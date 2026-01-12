@@ -6,14 +6,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Проверяем валидность контекста расширения
   if (chrome.runtime.lastError) {
     console.error("Extension context error:", chrome.runtime.lastError.message);
-    return;
+    sendResponse({ success: false, error: chrome.runtime.lastError.message });
+    return false;
   }
 
   console.log("request", request);
   if (request.action === "startChecking") {
     pidr = true;
+    sendResponse({ success: true });
+    return false;
   } else if (request.action === "stopChecking") {
     pidr = false;
+    sendResponse({ success: true });
+    return false;
   }
   console.log("pidr", pidr);
   if (request.copiedText && pidr) {
@@ -23,11 +28,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (fileName && fileName !== lastFileName) {
       lastFileName = fileName; // Обновляем последнее имя файла
       downloadFile(fileName.replaceAll(" ", "")); // Инициируем скачивание
+      // Сбрасываем lastFileName через 3 секунды, чтобы можно было копировать тот же файл снова
+      setTimeout(() => {
+        lastFileName = "";
+      }, 3000);
+      sendResponse({ success: true, processed: true });
+    } else {
+      sendResponse({ success: true, processed: false, reason: "duplicate" });
     }
+    return false; // Ответ отправлен синхронно
+  } else {
+    sendResponse({ success: true, processed: false });
+    return false;
   }
-
-  // Возвращаем true для асинхронного ответа (если нужно)
-  return true;
 });
 // Функция для скачивания файла
 async function downloadFile(fileName) {
@@ -84,6 +97,43 @@ async function downloadFile(fileName) {
       },
       (tab) => {
         console.log("PDF opened in new tab:", tab.id);
+
+        // Ждем загрузки PDF и запускаем печать через scripting API
+        setTimeout(() => {
+          chrome.scripting.executeScript(
+            {
+              target: { tabId: tab.id },
+              func: () => {
+                window.print();
+              },
+            },
+            (scriptResult) => {
+              if (chrome.runtime.lastError) {
+                console.error(
+                  "Script print error:",
+                  chrome.runtime.lastError.message
+                );
+                // Если scripting не работает, пробуем через сообщение
+                chrome.tabs.sendMessage(
+                  tab.id,
+                  { action: "printPDF" },
+                  (response) => {
+                    if (chrome.runtime.lastError) {
+                      console.error(
+                        "Print message error:",
+                        chrome.runtime.lastError.message
+                      );
+                    } else {
+                      console.log("Print message sent");
+                    }
+                  }
+                );
+              } else {
+                console.log("Print dialog opened via script");
+              }
+            }
+          );
+        }, 2000); // Задержка 2 секунды для загрузки PDF
       }
     );
 
